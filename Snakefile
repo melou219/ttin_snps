@@ -1,243 +1,231 @@
 shell.prefix("set -euo pipefail;") 
 
-gsamples = """
-    C6KB3ANXX_3_10nf
-    C6KB3ANXX_8_14nf
-    """.split()
+configfile: "config.yaml"
 
-tsamples = """
-    C6CGAACXX_8_14
-    C6CGAACXX_8_15
-    C6CGAACXX_8_16
-    C6CGAACXX_8_18
-    C70VFACXX_7_19
-    C72MEACXX_7_19
-    C72U8ACXX_3_19
-    C72U8ACXX_7_19
-    """.split()
-
-ends= "1 2".split()
-endsu= "1 2 U".split()
+# Folder variables
+raw     = "data/fastq_raw"
+trimmed = "data/fastq_trimmed"
+indexes = "data/indexes" 
+quant   = "data/kallisto_quant"
 
 
 
-## Software
-trimmomatic=    "java -jar ./src/Trimmomatic-0.33/trimmomatic-0.33.jar"
-bowtie2=        "bowtie2"
+# Path to programs
+kallisto    = config["software"]["kallisto"]
+trimmomatic = config["software"]["trimmomatic"]
+samtools    = config["software"]["samtools"]
+gzip        = config["software"]["gzip"]
+samtools    = config["software"]["samtools"]
+bcftools    = config["software"]["bcftools"]
 bowtie2build=   "bowtie2-build"
-samtools=       "./bin/samtools" # v0.1.20
-bcftools=       "./bin/bcftools" # v0.1.20
+
 
 rule all:
     input:
-        "data/assembly/assembly.fasta",
-        expand("data/fastq_g_raw/{sample}_{end}.fastq.gz",
-            sample= gsamples,
-            end=    ends ),
-        expand("data/fastq_t_raw/{sample}_{end}.fastq.gz",
-            sample= tsamples,
-            end=    ends ),
-        expand("data/fastq_g_trimmed/{sample}_{end}.fastq.gz",
-            sample= gsamples,
-            end=    endsu ),
-        expand("data/fastq_t_trimmed/{sample}_{end}.fastq.gz",
-            sample= tsamples,
-            end=    endsu ),
-        "data/index/assembly",
-        expand("data/g2t_k2/{sample}.bam",
-            sample= gsamples),
-        "data/g2t_k2/all.bam",
-        "data/g2t_k2/all.bam.bai",
-        "data/g2t_k2/all.bcf",
-        "data/g2t_k2/all.vcf",
-        #expand("data/g2t_k1/{sample}.bam",
-        #    sample= gsamples),
-        #"data/g2t_k1/all.bam",
-        #"data/g2t_k1/all.bcf",
-        #"data/g2t_k1/all.vcf"
+        expand(trimmed + "/{sample}_u.fastq.gz",
+            sample= config["dna_pe"]),
+        expand(trimmed + "/{sample}_u.fastq.gz",
+            sample= config["rna_pe"]),
+        config["assembly"] + ".fai",
+        indexes + "/assembly_kallisto.idx",
+        expand(quant + "/{sample}/abundance.tsv",
+            sample= config["rna_pe"])
 
 
 
 rule clean:
     shell:
         """
-        rm -rf data/assembly
-        rm -rf data/fastq_g_raw
-        rm -rf data/fastq_t_raw
         rm -rf data/fastq_g_trimmed
         rm -rf data/fastq_t_trimmed
+        rm -rf data/indexes
+        rm -rf data/kallisto_quant
+        rm -rf benchmarks
+        rm -rf logs
         """
 
 
 
-rule link_transcriptome_assembly:
-    """
-    Make a link from somewhere in the server (the ttin_assembly project) and 
-    leave the link in the data/assembly folder.
-    """
+rule index_assembly_samtools:
     input:
-        assembly=   "/home/SHARE/ttin_assembly/data/assembly/all_normalized.fasta"
+        assembly=   config["assembly"]
     output:
-        assembly=   "data/assembly/assembly.fasta"
-    params:
-        folder=     "data/assembly"
-    threads:
-        1
+        index=      config["assembly"] + ".fai"
     log:
-        # No log
-    shell:
-        """
-        mkdir -p  {params.folder}
-        ln -s {input.assembly} {output.assembly}
-        """
-
-
-
-rule index_assembly:
-    input:
-        assembly=   "data/assembly/assembly.fasta"
-    output:
-        index=      "data/assembly/assembly.fasta.fai"
-    log:
-        out=        "data/assembly/assembly_faidx.out",
-        err=        "data/assembly/assembly_faidx.err"
+        "logs/assembly/index.log"
+    benchmark:
+        "benchmarks/index_assembly.json"
     threads:
         1
     shell:
         """
         {samtools} faidx {input.assembly}   \
-        >   {log.out}                       \
-        2>  {log.err}
-        """
-
-rule link_fastq_g_raw:
-    """
-    Make a link of all the genomic raw fastq.gz files that the CNAG gave us and 
-    leave them in the data/fastq_g_raw folder.
-    """
-    input:
-        fastqgz=    "/home/SHARE/raw_data/ttin/ESTONBA_03/20150526/FASTQ/{sample}_{end}.fastq.gz"
-    output:
-        fastqgz=    "data/fastq_g_raw/{sample}_{end}.fastq.gz"
-    threads:
-        1
-    log:
-        # No log
-    params:
-        dir=        "data/fastq_g_raw"
-    shell:
-        """
-        mkdir -p {params.dir}
-        ln -s   {input.fastqgz} {output.fastqgz}
+        >   {log}
         """
 
 
 
-rule link_fastq_t_raw:
+# Trim reads
+rule trimmomatic_rna:
     """
-    Make a link of all the transcriptomic raw fastq.gz files that the CNAG gave
-    us and leave them in the data/fastq_t_raw folder.
+    Run trimmomatic on paired end mode to eliminate Illumina adaptors and remove
+    low quality regions and reads.
     """
     input:
-        fastqgz=    "/home/SHARE/raw_data/ttin/ESTONBA_02/20150630/FASTQ/{sample}_{end}.fastq.gz"
+        forward    = lambda wildcards: config["rna_pe"][wildcards.sample]["forward"],
+        reverse    = lambda wildcards: config["rna_pe"][wildcards.sample]["reverse"]
     output:
-        fastqgz=    "data/fastq_t_raw/{sample}_{end}.fastq.gz"
-    threads:
-        1
-    log:
-        # No log
+        forward    = protected("data/fastq_trimmed/{sample}_1.fastq.gz"),
+        reverse    = protected("data/fastq_trimmed/{sample}_2.fastq.gz"),
+        unpaired   = protected("data/fastq_trimmed/{sample}_u.fastq.gz")
     params:
-        dir=    "data/fastq_t_raw"
+        unpaired_1 = trimmed + "/{sample}_3.fastq.gz",
+        unpaired_2 = trimmed + "/{sample}_4.fastq.gz",
+        adaptor    = lambda wildcards: config["rna_pe"][wildcards.sample]["adaptor"],
+        trimming   = config["trimmomatic_params"],
+        phred      = lambda wildcards: config["rna_pe"][wildcards.sample]["phred"]
+    benchmark:
+        "benchmarks/trimmomatic/{sample}.json"
+    log:
+        "logs/trimmomatic/{sample}.log" 
+    threads:
+        4 # It doesn't perform well above this value
     shell:
         """
-        mkdir -p {params.dir}
-        ln -s {input.fastqgz} {output.fastqgz}
-        """
-
-
-
-rule link_fastq_t_trimmed:
-    """
-    Make a link of all the trimmed4 files that I did when the ttin_assembly 
-    project. Save them in the data/fastq_t_trimmed folder.
-    """
-    input:
-        fastqgz=    "/home/SHARE/ttin_assembly/data/fastq_trimmed/{sample}_{end}.trimmed4.fastq.gz"
-    output:
-        fastqgz=    "data/fastq_t_trimmed/{sample}_{end}.fastq.gz"
-    params:
-        dir=        "data/fastq_t_trimmed"
-    log:
-        # No log
-    threads:
-        1
-    shell:
-        """
-        mkdir -p {params.dir}
-        ln -s {input.fastqgz} {output.fastqgz}
-        """
-
-
-
-rule trimmomatic_g:
-    """
-    Trim the genome with trimmomatic. Params are the same as transcriptome:
-        HEADCROP:13  - Delete first 13 nt (Random hexamer priming Dudoit et al.)        
-        ILLUMINACLIP - Search and remove adaptors (Truseq3-PE2)
-        MINLEN:31    -  
-        AVGQUAL:10   -
-        MINLEN:31    -
-        TRAILING:19  -
-        MINLEN:31    -
-        TOPHRED33    -
-    """
-    input:
-        f=          "data/fastq_g_raw/{sample}_1.fastq.gz",
-        r=          "data/fastq_g_raw/{sample}_2.fastq.gz"
-    output:
-        f=          "data/fastq_g_trimmed/{sample}_1.fastq.gz",
-        r=          "data/fastq_g_trimmed/{sample}_2.fastq.gz",
-        u=          "data/fastq_g_trimmed/{sample}_U.fastq.gz"
-    params:
-        dir=        "data/fastq_g_trimmed",
-        adaptors=   "./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa",
-        u1=         "data/fastq_g_trimmed/{sample}_u1.fastq.gz",
-        u2=         "data/fastq_g_trimmed/{sample}_u2.fastq.gz"
-    threads:
-        4
-    log:
-        out=        "data/fastq_g_trimmed/{sample}.out",
-        err=        "data/fastq_g_trimmed/{sample}.err",
-        trimlog=    "data/fastq_g_trimmed/{sample}.log.gz"
-    shell:
-        """
-        mkdir -p {params.dir}
-        
         {trimmomatic} PE                            \
             -threads {threads}                      \
-            -phred33                                \
-            -trimlog >( gzip -9 > {log.trimlog} )   \
-            {input.f}                               \
-            {input.r}                               \
-            {output.f}                              \
-            {params.u1}                             \
-            {output.r}                              \
-            {params.u2}                             \
-            HEADCROP:13                             \
-            ILLUMINACLIP:{params.adaptors}:2:30:10  \
-            MINLEN:31                               \
-            AVGQUAL:10                              \
-            MINLEN:31                               \
-            TRAILING:19                             \
-            MINLEN:31                               \
-            TOPHRED33                               \
-        >   {log.out}                               \
-        2>  {log.err}
-        
-        gzip -dc {params.u1} {params.u2}            |
-        gzip -9 > {output.u}
+            -{params.phred}                         \
+            {input.forward}                         \
+            {input.reverse}                         \
+            {output.forward}                        \
+            {params.unpaired_1}                     \
+            {output.reverse}                        \
+            {params.unpaired_2}                     \
+            ILLUMINACLIP:{params.adaptor}:2:30:10   \
+            {params.trimming}                       \
+            2> {log}
             
-        rm {params.u1} {params.u2}
+        {gzip} -dc {params.unpaired_1} {params.unpaired_2}  |
+        {gzip} -9 > {output.unpaired}
+        
+        rm {params.unpaired_1} {params.unpaired_2}
+        """
+
+
+rule trimmomatic_dna:
+    """
+    Run trimmomatic on paired end mode to eliminate Illumina adaptors and remove
+    low quality regions and reads.
+    """
+    input:
+        forward    = lambda wildcards: config["dna_pe"][wildcards.sample]["forward"],
+        reverse    = lambda wildcards: config["dna_pe"][wildcards.sample]["reverse"]
+    output:
+        forward    = protected(trimmed + "/{sample}_1.fastq.gz"),
+        reverse    = protected(trimmed + "/{sample}_2.fastq.gz"),
+        unpaired   = protected(trimmed + "/{sample}_u.fastq.gz")
+    params:
+        unpaired_1 = trimmed + "/{sample}_3.fastq.gz",
+        unpaired_2 = trimmed + "/{sample}_4.fastq.gz",
+        adaptor    = lambda wildcards: config["dna_pe"][wildcards.sample]["adaptor"],
+        trimming   = config["trimmomatic_params"],
+        phred      = lambda wildcards: config["dna_pe"][wildcards.sample]["phred"]
+    benchmark:
+        "benchmarks/trimmomatic/{sample}.json"
+    log:
+        "logs/trimmomatic/{sample}.log" 
+    threads:
+        4 # It doesn't perform well above this value
+    shell:
+        """
+        {trimmomatic} PE                            \
+            -threads {threads}                      \
+            -{params.phred}                         \
+            {input.forward}                         \
+            {input.reverse}                         \
+            {output.forward}                        \
+            {params.unpaired_1}                     \
+            {output.reverse}                        \
+            {params.unpaired_2}                     \
+            ILLUMINACLIP:{params.adaptor}:2:30:10   \
+            {params.trimming}                       \
+            2> {log}
+            
+        {gzip} -dc {params.unpaired_1} {params.unpaired_2}  |
+        {gzip} -9 > {output.unpaired}
+        
+        rm {params.unpaired_1} {params.unpaired_2}
+        """
+
+
+
+rule build_kallisto_index:
+    """
+    Self-explanatory
+    """
+    input:
+        assembly = config["assembly"]
+    output:
+        index    = indexes + "/assembly_kallisto.idx"
+    benchmark:
+        "benchmark/kallisto/build_kallisto_index.json"
+    log:
+        "logs/kallisto/build_kallisto_index.json"
+    threads:
+        1
+    shell:
+        """
+        {kallisto} index            \
+            --index={output.index}  \
+            {input.assembly}        \
+        2> {log}
+        """
+
+
+
+rule kallisto_quant_pe:
+    input:
+        forward = trimmed + "/{sample}_1.fastq.gz",
+        reverse = trimmed + "/{sample}_2.fastq.gz",
+        index   = indexes + "/assembly_kallisto.idx"
+    output:
+        abundance_tsv = quant + "/{sample}/abundance.tsv",
+        abundance_h5  = quant + "/{sample}/abundance.h5",
+        pseudobam     = quant + "/{sample}/{sample}.bam"
+    params:
+        outdir  = quant + "/{sample}",
+        params  = config["kallisto_params"]
+    threads:
+        24
+    log:
+        "logs/quant/{sample}.log"
+    benchmark:
+        "benchmarks/quant/{sample}.json"
+    shell:
+        """
+        ({kallisto} quant               \
+            --index={input.index}       \
+            --output={params.outdir}    \
+            --pseudobam                 \
+            --threads={threads}         \
+            {params.params}             \
+            {input.forward}             \
+            {input.reverse}             |
+        {samtools} view                 \
+            -S  `# Input is SAM`        \
+            -h  `# Print SAM header`    \
+            -u  `# Uncompressed SAM`    \
+            -                           |
+        {samtools} rmdup                \
+            -s - -                      |
+        {samtools} sort                 \
+            -@  {threads}               \
+            -l  9                       \
+            -o  -                       \
+            -T  $(mktemp)               \
+            -O  bam                     \
+        > {output.pseudobam} )          \
+        2> {log}
         """
 
 
@@ -248,12 +236,11 @@ rule trimmomatic_g:
 
 rule make_bowtie2_index:
     input:
-        assembly=   "data/assembly/assembly.fasta"
+        assembly=   config["assembly"]
     output:
-        name=       "data/index/assembly"        
+        name=       touch("data/index/assembly_bwt")
     log:
-        out=        "data/index/index.out",
-        err=        "data/index/index.err"
+        "logs/bowtie2/make_bowtie2_index.log"
     threads:
         1
     params:
@@ -265,10 +252,7 @@ rule make_bowtie2_index:
         {bowtie2build}          \
             {input.assembly}    \
             {output}            \
-        >   {log.out}           \
-        2>  {log.err}
-
-        touch {output}
+        >   {log}
         """
     
 
@@ -327,694 +311,3 @@ rule g2t_k2_mapping:
         touch {log.out}
         """
 
-
-
-rule g2t_k2_merge:
-    input:
-        bams=       expand("data/g2t_k2/{samples}.bam",
-                        samples= gsamples)
-    output:
-        bam=        "data/g2t_k2/all.bam"
-    log:
-        out=        "data/g2t_k2/all.out",
-        err=        "data/g2t_k2/all.err"
-    params:
-        bam_tmp=    "data/g2t_k2/all_tmp.bam",
-        header=     "data/g2t_k2/header.txt",
-        header1=    "data/g2t_k2/tmp1",
-        header2=    "data/g2t_k2/tmp2",
-        header3=    "data/g2t_k2/tmp3"
-    threads:
-        24
-    shell:
-        """
-        {samtools} merge        \
-            -f                  \
-            -r                  \
-            -l  9               \
-            -@  {threads}       \
-            {params.bam_tmp}    \
-            {input.bams}        \
-        >   {log.out}           \
-        2>  {log.err}
-
-        {samtools} view         \
-            -H                  \
-            {params.bam_tmp}    \
-        >   {params.header}     \
-        2>> {log.err}
-        
-        head    -n  -1  {params.header} >   {params.header1}
-        tail    -n  1   {params.header} >   {params.header3}
-        
-        cat /dev/null > {params.header2}
-        
-        for sample in {gsamples}; do
-            echo -e "@RG\tID:${{sample}}\tLB:truseq_${{sample}}\tPL:Illumina\tSM:${{sample}}" >> {params.header2}
-        done
-        
-        cat {params.header1} {params.header2} {params.header3} > {params.header}
-
-        {samtools} reheader     \
-            {params.header}     \
-            {params.bam_tmp}    \
-        >   {output.bam}        \
-        2>> {log.err}
-
-        rm  {params}
-        """
-
-
-
-rule g2t_k2_bai:
-    input:
-        bam=    "data/g2t_k2/all.bam"
-    output:
-        bai=    "data/g2t_k2/all.bam.bai"
-    log:
-        out=    "data/g2t_k2/all_index.out",
-        err=    "data/g2t_k2/all_index.err"
-    threads:
-        1
-    shell:
-        """
-        {samtools}  index   \
-            {input.bam}     \
-        >   {log.out}       \
-        2>  {log.err}
-        """
-
-
-
-rule g2t_k2_bcf:
-    """
-    From the BAM and the assembly, call snps with samtools mpileup and generate 
-    a BCF file.
-    Explanation of all the flags:
-        Input options:
-            -A: Count anomalous flags
-            -B: Disable BAQ computation
-            -f: faidx indexed reference sequence file [null]
-            -C: parameter for adjusting mapQ; 0 to disable [0]
-        Output options:
-            -D: output per-sample DP in BCF (require -g/-u)
-            -g: generate BCF output (genotype likelihoods)
-            -u: generate uncompress BCF output
-        SNP/INDEL genotype likelyhoods options
-            -I: do not perform indel calling
-    """
-    input:
-        assembly=       "data/assembly/assembly.fasta",
-        assembly_idx=   "data/assembly/assembly.fasta.fai",
-        bam=            "data/g2t_k2/all.bam"
-    output:
-        bcf=            "data/g2t_k2/all.bcf"
-    threads:
-        1
-    log:
-        out=            "data/g2t_k2/all_call_snps.out",
-        err=            "data/g2t_k2/all_call_snps.err"
-    params:
-        mapq= "50"
-    shell:
-        """
-        {samtools}  mpileup         \
-            -A                      \
-            -B                      \
-            -D                      \
-            -g                      \
-            `#-u`                   \
-            -I                      \
-            -f  {input.assembly}    \
-            -C  {params.mapq}       \
-            {input.bam}             \
-        >   {output.bcf}            \
-        2>  {log.err}
-
-        touch {log.out}
-        """
-
-
-
-rule g2t_k2_create_samples:
-    output:
-        samples=    "data/g2t_k2/samples.txt"
-    threads:
-        1
-    log:
-        out=        "data/g2t_k2/samples.out",
-        err=        "data/g2t_k2/samples.err"
-    shell:
-        """
-        cat /dev/null > {output.samples}
-
-        for sample in {gsamples}; do
-            echo -e "${{sample}}\t2" >> {output.samples}
-        done
-        """
-
-
-
-rule g2t_k2_vcf:
-    """
-        Input/output options:
-            -L: calculate LD for adjacent sites
-            -N: skip sites where REF is not A/C/G/T
-        Consensus/variant calling options:
-            -c: SNP calling (force -e)
-            -e: likelihood based analyses
-            -g: call genotypes at variant sites (force -c)
-            -I: skip indels
-            -v: output potential variant sites only (force -c)
-    """
-    input:
-        samples=    "data/g2t_k2/samples.txt",
-        bcf=        "data/g2t_k2/all.bcf"
-    output:
-        vcf=        "data/g2t_k2/all.vcf"
-    log:
-        out=        "data/g2t_k2/vcf.out",
-        err=        "data/g2t_k2/vcf.err"
-    threads:
-        1
-    shell:
-        """
-        {bcftools} view         \
-            -LNcegIv            \
-            -s  {input.samples} \
-            {input.bcf}         \
-        >   {output.vcf}        \
-        2>  {log.err}
-
-        touch   {log.out} 
-        """
-
-
-
-#############
-## G2T k=1 ##
-#############
-
-
-
-rule make_bowtie2_index:
-    input:
-        assembly=   "data/assembly/filtered.fasta"
-    output:
-        name=       "data/index/filtered"        
-    log:
-        out=        "data/index/filtered.out",
-        err=        "data/index/filtered.err"
-    threads:
-        1
-    params:
-        dir=        "data/index"
-    shell:
-        """
-        mkdir -p {params.dir}
-    
-        {bowtie2build}          \
-            {input.assembly}    \
-            {output}            \
-        >   {log.out}           \
-        2>  {log.err}
-
-        touch {output}
-        """
-
-
-
-rule g2t_k1_mapping:
-    """
-    Perform the g2t mapping with bowtie2 and the 
-    sam | bam | rmdup | sort conversions
-    """
-    input:
-        index=  "data/index/filtered",
-        f=      "data/fastq_g_trimmed/{sample}_1.fastq.gz",
-        r=      "data/fastq_g_trimmed/{sample}_2.fastq.gz",
-        u=      "data/fastq_g_trimmed/{sample}_U.fastq.gz"
-    output:
-        bam=    "data/g2t_k1/{sample}.bam"
-    log:
-        out=    "data/g2t_k1/{sample}.out",
-        err=    "data/g2t_k1/{sample}.err"
-    params:
-        sample= "{sample}",
-        dir=    "data/g2t_k1"
-    threads:
-        24
-    shell:
-        """
-        mkdir -p {params.dir}
-        
-        {bowtie2}                   \
-            --threads   {threads}   \
-            --phred33               \
-            --quiet                 \
-            --sensitive-local       \
-            --no-unal               \
-            -k  1                   \
-            -x  {input.index}       \
-            -1  {input.f}           \
-            -2  {input.r}           \
-            -U  {input.u}           |
-        {samtools}  view            \
-            -S  `# Input is SAM`    \
-            -h  `# Print SAM header`\
-            -u  `# Uncompressed SAM`\
-            -                       |
-        {samtools}  sort            \
-            -@  {threads}           \
-            -l  0                   \
-            -o                      \
-            - $(mktemp)             |
-        {samtools}  rmdup           \
-            -                       \
-        {output.bam}                \
-        2>  {log.err}
-
-        touch {log.out}
-        """
-
-
-rule g2t_k1_merge:
-    input:
-        bams=       expand("data/g2t_k1/{samples}.bam",
-                        samples= gsamples)
-    output:
-        bam=        "data/g2t_k1/all.bam"
-    log:
-        out=        "data/g2t_k1/all.out",
-        err=        "data/g2t_k1/all.err"
-    params:
-        bam_tmp=    "data/g2t_k1/all_tmp.bam",
-        header=     "data/g2t_k1/header.txt",
-        header1=    "data/g2t_k1/tmp1",
-        header2=    "data/g2t_k1/tmp2",
-        header3=    "data/g2t_k1/tmp3"
-    threads:
-        24
-    shell:
-        """
-        {samtools} merge        \
-            -f                  \
-            -r                  \
-            -l  9               \
-            -@  {threads}       \
-            {params.bam_tmp}    \
-            {input.bams}        \
-        >   {log.out}           \
-        2>  {log.err}
-
-        {samtools} view         \
-            -H                  \
-            {params.bam_tmp}    \
-        >   {params.header}     \
-        2>> {log.err}
-        
-        head    -n  -1  {params.header} >   {params.header1}
-        tail    -n  1   {params.header} >   {params.header3}
-        
-        cat /dev/null > {params.header2}
-        
-        for sample in {gsamples}; do
-            echo -e "@RG\tID:${{sample}}\tLB:truseq_${{sample}}\tPL:Illumina\tSM:${{sample}}" >> {params.header2}
-        done
-        
-        cat {params.header1} {params.header2} {params.header3} > {params.header}
-
-        {samtools} reheader     \
-            {params.header}     \
-            {params.bam_tmp}    \
-        >   {output.bam}        \
-        2>> {log.err}
-
-        rm  {params}
-        """
-
-
-
-rule g2t_k1_bai:
-    input:
-        bam=    "data/g2t_k1/all.bam"
-    output:
-        bai=    "data/g2t_k1/all.bam.bai"
-    log:
-        out=    "data/g2t_k1/all_index.out",
-        err=    "data/g2t_k1/all_index.err"
-    threads:
-        1
-    shell:
-        """
-        {samtools}  index   \
-            {input.bam}     \
-        >   {log.out}       \
-        2>  {log.err}
-        """
-
-
-
-rule g2t_k1_bcf:
-    """
-    From the BAM and the assembly, call snps with samtools mpileup and generate 
-    a BCF file.
-    Explanation of all the flags:
-        Input options:
-            -A: Count anomalous flags
-            -B: Disable BAQ computation
-            -f: faidx indexed reference sequence file [null]
-            -C: parameter for adjusting mapQ; 0 to disable [0]
-        Output options:
-            -D: output per-sample DP in BCF (require -g/-u)
-            -g: generate BCF output (genotype likelihoods)
-            -u: generate uncompress BCF output
-        SNP/INDEL genotype likelyhoods options
-            -I: do not perform indel calling
-    """
-    input:
-        assembly=       "data/assembly/assembly.fasta",
-        assembly_idx=   "data/assembly/assembly.fasta.fai",
-        bam=            "data/g2t_k1/all.bam"
-    output:
-        bcf=            "data/g2t_k1/all.bcf"
-    threads:
-        1
-    log:
-        out=            "data/g2t_k1/all_call_snps.out",
-        err=            "data/g2t_k1/all_call_snps.err"
-    params:
-        mapq= "50"
-    shell:
-        """
-        {samtools}  mpileup         \
-            -A                      \
-            -B                      \
-            -D                      \
-            -g                      \
-            `#-u`                   \
-            -I                      \
-            -f  {input.assembly}    \
-            -C  {params.mapq}       \
-            {input.bam}             \
-        >   {output.bcf}            \
-        2>  {log.err}
-
-        touch {log.out}
-        """
-
-
-
-rule g2t_k1_create_samples:
-    output:
-        samples=    "data/g2t_k1/samples.txt"
-    threads:
-        1
-    log:
-        out=        "data/g2t_k1/samples.out",
-        err=        "data/g2t_k1/samples.err"
-    shell:
-        """
-        cat /dev/null > {output.samples}
-
-        for sample in {gsamples}; do
-            echo -e "${{sample}}\t2" >> {output.samples}
-        done
-        """
-
-
-
-rule g2t_k1_vcf:
-    """
-        Input/output options:
-            -L: calculate LD for adjacent sites
-            -N: skip sites where REF is not A/C/G/T
-        Consensus/variant calling options:
-            -c: SNP calling (force -e)
-            -e: likelihood based analyses
-            -g: call genotypes at variant sites (force -c)
-            -I: skip indels
-            -v: output potential variant sites only (force -c)
-    """
-    input:
-        samples=    "data/g2t_k1/samples.txt",
-        bcf=        "data/g2t_k1/all.bcf"
-    output:
-        vcf=        "data/g2t_k1/all.vcf"
-    log:
-        out=        "data/g2t_k1/vcf.out",
-        err=        "data/g2t_k1/vcf.err"
-    threads:
-        1
-    shell:
-        """
-        {bcftools} view         \
-            -LNcegIv            \
-            -s  {input.samples} \
-            {input.bcf}         \
-        >   {output.vcf}        \
-        2>  {log.err}
-
-        touch   {log.out} 
-        """
-
-
-
-################################################################################
-## T2T                                                                        ##
-################################################################################
-
-rule t2t_mapping:
-    """
-    Perform the t2t mapping with bowtie2 and the 
-    sam | bam | rmdup | sort conversions
-    """
-    input:
-        index=  "data/index/filtered",
-        f=      "data/fastq_t_trimmed/{sample}_1.fastq.gz",
-        r=      "data/fastq_t_trimmed/{sample}_2.fastq.gz",
-        u=      "data/fastq_t_trimmed/{sample}_U.fastq.gz"
-    output:
-        bam=    "data/t2t/{sample}.bam"
-    log:
-        out=    "data/t2t/{sample}.out",
-        err=    "data/t2t/{sample}.err"
-    params:
-        sample= "{sample}",
-        dir=    "data/t2t"
-    threads:
-        24
-    shell:
-        """
-        mkdir -p {params.dir}
-        
-        {bowtie2}                   \
-            --threads   {threads}   \
-            --phred33               \
-            --quiet                 \
-            --sensitive-local       \
-            --no-unal               \
-            -x  {input.index}       \
-            -1  {input.f}           \
-            -2  {input.r}           \
-            -U  {input.u}           |
-        {samtools}  view            \
-            -S  `# Input is SAM`    \
-            -h  `# Print SAM header`\
-            -u  `# Uncompressed SAM`\
-            -                       |
-        {samtools}  sort            \
-            -@  {threads}           \
-            -l  0                   \
-            -o                      \
-            - $(mktemp)             |
-        {samtools}  rmdup           \
-            -                       \
-        {output.bam}                \
-        2>  {log.err}
-
-        touch {log.out}
-        """
-
-
-
-rule t2t_merge:
-    input:
-        bams=       expand("data/t2t/{samples}.bam",
-                        samples= tsamples)
-    output:
-        bam=        "data/t2t/all.bam"
-    log:
-        out=        "data/t2t/all.out",
-        err=        "data/t2t/all.err"
-    params:
-        bam_tmp=    "data/t2t/all_tmp.bam",
-        header=     "data/t2t/header.txt",
-        header1=    "data/t2t/tmp1",
-        header2=    "data/t2t/tmp2",
-        header3=    "data/t2t/tmp3"
-    threads:
-        24
-    shell:
-        """
-        {samtools} merge        \
-            -f                  \
-            -r                  \
-            -l  9               \
-            -@  {threads}       \
-            {params.bam_tmp}    \
-            {input.bams}        \
-        >   {log.out}           \
-        2>  {log.err}
-
-        {samtools} view         \
-            -H                  \
-            {params.bam_tmp}    \
-        >   {params.header}     \
-        2>> {log.err}
-        
-        head    -n  -1  {params.header} >   {params.header1}
-        tail    -n  1   {params.header} >   {params.header3}
-        
-        cat /dev/null > {params.header2}
-        
-        for sample in {gsamples}; do
-            echo -e "@RG\tID:${{sample}}\tLB:truseq_${{sample}}\tPL:Illumina\tSM:${{sample}}" >> {params.header2}
-        done
-        
-        cat {params.header1} {params.header2} {params.header3} > {params.header}
-
-        {samtools} reheader     \
-            {params.header}     \
-            {params.bam_tmp}    \
-        >   {output.bam}        \
-        2>> {log.err}
-
-        rm  {params}
-        """
-
-
-
-rule t2t_bai:
-    input:
-        bam=    "data/t2t/all.bam"
-    output:
-        bai=    "data/t2t/all.bam.bai"
-    log:
-        out=    "data/t2t/all_index.out",
-        err=    "data/t2t/all_index.err"
-    threads:
-        1
-    shell:
-        """
-        {samtools}  index   \
-            {input.bam}     \
-        >   {log.out}       \
-        2>  {log.err}
-        """
-
-
-
-rule t2t_bcf:
-    """
-    From the BAM and the assembly, call snps with samtools mpileup and generate 
-    a BCF file.
-    Explanation of all the flags:
-        Input options:
-            -A: Count anomalous flags
-            -B: Disable BAQ computation
-            -f: faidx indexed reference sequence file [null]
-            -C: parameter for adjusting mapQ; 0 to disable [0]
-        Output options:
-            -D: output per-sample DP in BCF (require -g/-u)
-            -g: generate BCF output (genotype likelihoods)
-            -u: generate uncompress BCF output
-        SNP/INDEL genotype likelyhoods options
-            -I: do not perform indel calling
-    """
-    input:
-        assembly=       "data/assembly/filtered.fasta",
-        assembly_idx=   "data/assembly/filtered.fasta.fai",
-        bam=            "data/t2t/all.bam"
-    output:
-        bcf=            "data/t2t/all.bcf"
-    threads:
-        1
-    log:
-        out=            "data/t2t/all_call_snps.out",
-        err=            "data/t2t/all_call_snps.err"
-    params:
-        mapq= "50"
-    shell:
-        """
-        {samtools}  mpileup         \
-            -A                      \
-            -B                      \
-            -D                      \
-            -g                      \
-            `#-u`                   \
-            -I                      \
-            -f  {input.assembly}    \
-            -C  {params.mapq}       \
-            {input.bam}             \
-        >   {output.bcf}            \
-        2>  {log.err}
-
-        touch {log.out}
-        """
-
-
-
-rule t2t_create_samples:
-    output:
-        samples=    "data/t2t/samples.txt"
-    threads:
-        1
-    log:
-        out=        "data/t2t/samples.out",
-        err=        "data/t2t/samples.err"
-    shell:
-        """
-        cat /dev/null > {output.samples}
-
-        for sample in {gsamples}; do
-            echo -e "${{sample}}\t2" >> {output.samples}
-        done
-        """
-
-
-
-rule g2t_k2_vcf:
-    """
-        Input/output options:
-            -L: calculate LD for adjacent sites
-            -N: skip sites where REF is not A/C/G/T
-        Consensus/variant calling options:
-            -c: SNP calling (force -e)
-            -e: likelihood based analyses
-            -g: call genotypes at variant sites (force -c)
-            -I: skip indels
-            -v: output potential variant sites only (force -c)
-    """
-    input:
-        samples=    "data/g2t_k2/samples.txt",
-        bcf=        "data/g2t_k2/all.bcf"
-    output:
-        vcf=        "data/g2t_k2/all.vcf"
-    log:
-        out=        "data/g2t_k2/vcf.out",
-        err=        "data/g2t_k2/vcf.err"
-    threads:
-        1
-    shell:
-        """
-        {bcftools} view         \
-            -LNcegIv            \
-            -s  {input.samples} \
-            {input.bcf}         \
-        >   {output.vcf}        \
-        2>  {log.err}
-
-        touch   {log.out} 
-        """
-       
