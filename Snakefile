@@ -3,12 +3,14 @@ shell.prefix("set -euo pipefail;")
 configfile: "config.yaml"
 
 # Folder variables
-raw     = "data/fastq_raw"
-trimmed = "data/fastq_trimmed"
-indexes = "data/indexes" 
-quant   = "data/kallisto_quant"
-
-
+assembly     = "data/assembly"
+raw          = "data/fastq_raw"
+trimmed      = "data/fastq_trimmed"
+indexes      = "data/indexes" 
+quant        = "data/kallisto_quant"
+sleuth       = "data/sleuth"
+transdecoder = "data/transdecoder"
+filtering    = "data/filtering"
 
 # Path to programs
 kallisto    = config["software"]["kallisto"]
@@ -23,13 +25,8 @@ bowtie2build=   "bowtie2-build"
 rule all:
     input:
         expand(trimmed + "/{sample}_u.fastq.gz",
-            sample= config["dna_pe"]),
-        expand(trimmed + "/{sample}_u.fastq.gz",
-            sample= config["rna_pe"]),
-        config["assembly"] + ".fai",
-        indexes + "/assembly_kallisto.idx",
-        expand(quant + "/{sample}/abundance.tsv",
-            sample= config["rna_pe"])
+            sample= config["dna_pe"]), # Trimmed genmoe
+        filtering + "/expressed_and_coding.fasta"
 
 
 
@@ -40,6 +37,8 @@ rule clean:
         rm -rf data/fastq_t_trimmed
         rm -rf data/indexes
         rm -rf data/kallisto_quant
+        rm -rf data/sleuth
+        rm -rf data/filtering
         rm -rf benchmarks
         rm -rf logs
         """
@@ -65,7 +64,6 @@ rule index_assembly_samtools:
 
 
 
-# Trim reads
 rule trimmomatic_rna:
     """
     Run trimmomatic on paired end mode to eliminate Illumina adaptors and remove
@@ -227,6 +225,149 @@ rule kallisto_quant_pe:
         > {output.pseudobam} )          \
         2> {log}
         """
+
+
+
+rule create_experimental_design_for_sleuth:
+    output:
+        table = sleuth + "/experimental_design.txt"
+    threads:
+        1
+    log:
+        "logs/sleuth/create_experimental_design_for_sleuth.log"
+    benchmark:
+        "benchmarks/sleuth/create_experimental_design_for_sleuth.json"
+    run:
+        design_dict = {accession: config["rna_pe"][accession]["condition"] for accession in config["rna_pe"]}            
+        with open(output.table, "w") as table:
+            table.write("run_accession\tcondition\n")
+            for accession in design_dict:
+                table.write(accession + "\t" + design_dict[accession] + "\n")
+            
+
+
+rule get_normalized_tpm_table:
+    input:
+        design = sleuth + "/experimental_design.txt",
+        tsvs   = expand(
+            quant + "/{sample}/abundance.tsv",
+                sample = config["rna_pe"]
+            ),
+        h5s    = expand(
+            quant + "/{sample}/abundance.h5",
+                sample = config["rna_pe"]
+            ),
+        bams   = expand(
+            quant + "/{sample}/{sample}.bam",
+                sample = config["rna_pe"]
+            )
+    output:
+        table= sleuth + "/tpm_normalized.tsv",
+        rdata= sleuth + "/sleuth_object.RData"
+    threads:
+        1
+    log:
+        "logs/sleuth/get_normalized_tpm_table.log"
+    benchmark:
+        "benchmark/sleuth/get_normalized_tpm_table.json"
+    shell:
+        """
+        Rscript scripts/sleuth_get_normalized_tpm_table.R \
+        2> {log}   
+        """
+
+
+
+rule get_expressed_isoforms_ids:
+    input:
+        table= sleuth + "/tpm_normalized.tsv"
+    output:
+        expressed = filtering + "/id_expressed.tsv"
+    threads:
+        1
+    log:
+        "logs/filtering/get_expressed_isoforms_ids.log"
+    benchmark:
+        "benchmark/filtering/get_expressed_isoforms_ids.json"
+    shell:
+        """
+        ( tail -n +2 {input.table}  |
+        awk '$4 >0'                 |
+        cut -f 1                    | 
+        uniq                        \
+        > {output.expressed} )      \
+        2> {log}
+        """
+
+
+
+rule get_coding_isoforms_ids:
+    input:
+        pep    = config["pep"]
+    output:
+        coding = filtering + "/id_coding.tsv" 
+    threads:
+        1
+    log:
+        "logs/fitering/get_coding_isoforms_ids.log"
+    benchmark:
+        "benchmark/filtering/get_coding_isoforms_ids.json"
+    shell:
+        """
+        ( grep ^">" {input.pep} |
+        cut -f 2 -d ">"         |
+        cut -f 1 -d " "         |
+        cut -f -1 -d "|"        |
+        sort -u                 \
+        > {output.coding} )     \
+        2> {log}
+        """
+
+
+rule get_expressed_and_coding_ids:
+    input:
+        expressed = filtering + "/id_expressed.tsv",
+        coding    = filtering + "/id_coding.tsv",
+    output:
+        filter    = filtering + "/expressed_and_coding.tsv"
+    log:
+        "logs/filtering/get_expressed_and_coding_ids.log"
+    benchmark:
+        "benchmarks/filtering/get_expressed_and_coding_ids.json"
+    threads:
+        1
+    shell:
+        """
+        comm -12                        \
+            <(sort {input.expressed})   \
+            <(sort {input.coding})      \
+        > {output.filter}               \
+        2>  {log}
+        """
+
+
+rule get_expressed_and_coding_fasta:
+    input:
+        assembly= config["assembly"],
+        index=    config["assembly"] + ".fai",
+        ids=      filtering + "/expressed_and_coding.tsv"
+    output:
+        assembly= filtering + "/expressed_and_coding.fasta"
+    threads:
+        1
+    log:
+        "logs/filtering/get_expressed_and_coding_fasta.log"
+    benchmark:
+        "benchmark/filtering/get_expressed_and_coding_fasta.log"
+    shell:
+        """
+        cat {input.ids}                         |
+        xargs samtools faidx {input.assembly}   \
+        >  {output.assembly}                    \
+        2> {log}
+        """
+
+
 
 
 
