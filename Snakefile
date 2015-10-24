@@ -26,7 +26,7 @@ rule all:
     input:
         expand(trimmed + "/{sample}_u.fastq.gz",
             sample= config["dna_pe"]), # Trimmed genmoe
-        filtering + "/expressed_and_coding.fasta"
+         filtering + "/assembly_exp_cod_mono.fasta"
 
 
 
@@ -314,12 +314,10 @@ rule get_coding_isoforms_ids:
         "benchmark/filtering/get_coding_isoforms_ids.json"
     shell:
         """
-        ( grep ^">" {input.pep} |
-        cut -f 2 -d ">"         |
-        cut -f 1 -d " "         |
-        cut -f -1 -d "|"        |
-        sort -u                 \
-        > {output.coding} )     \
+        python3 scripts/fasta_to_id.py < {input.pep}    |
+        python3 scripts/pep_id_to_isoform.py            |
+        sort -u                                         \
+        >  {output.coding}                              \
         2> {log}
         """
 
@@ -329,11 +327,11 @@ rule get_expressed_and_coding_ids:
         expressed = filtering + "/id_expressed.tsv",
         coding    = filtering + "/id_coding.tsv",
     output:
-        filter    = filtering + "/expressed_and_coding.tsv"
+        filter    = filtering + "/id_expressed_and_coding.tsv"
     log:
         "logs/filtering/get_expressed_and_coding_ids.log"
     benchmark:
-        "benchmarks/filtering/get_expressed_and_coding_ids.json"
+        "benchmark/filtering/get_expressed_and_coding_ids.json"
     threads:
         1
     shell:
@@ -350,9 +348,9 @@ rule get_expressed_and_coding_fasta:
     input:
         assembly= config["assembly"],
         index=    config["assembly"] + ".fai",
-        ids=      filtering + "/expressed_and_coding.tsv"
+        ids=      filtering + "/id_expressed_and_coding.tsv"
     output:
-        assembly= filtering + "/expressed_and_coding.fasta"
+        assembly= filtering + "/id_expressed_and_coding.fasta"
     threads:
         1
     log:
@@ -369,6 +367,49 @@ rule get_expressed_and_coding_fasta:
 
 
 
+rule get_monotigs_id:
+    input:
+        filtered_assembly= filtering + "/id_expressed_and_coding.fasta"
+    output:
+        monotig_ids= filtering + "/id_monotigs.tsv"
+    threads:
+        1
+    log:
+        "logs/filtering/compute_monotigs_id.log"
+    benchmark:
+        "benchmark/filtering/compute_monotigs_id.json"
+    shell:
+        """
+        python3 scripts/filter_n_isogroups.py   \
+            <(python3 scripts/fasta_to_id.py    \
+                < {input.filtered_assembly} )   \
+            {output.monotig_ids}                \
+        > {log}
+        """
+
+
+
+rule get_monotigs_fasta:
+    input:
+        filtered_assembly= filtering + "/id_expressed_and_coding.fasta",
+        monotig_ids= filtering + "/id_monotigs.tsv"
+    output:
+        monotig_assembly= filtering + "/assembly_exp_cod_mono.fasta"
+    threads:
+        1
+    log:
+        "logs/filtering/get_monotigs_fasta.log"
+    benchmark:
+        "benchmark/filtering/get_monotigs_fasta.json"
+    shell:
+        """
+        samtools faidx {input.filtered_assembly}
+        
+        cat {input.monotig_ids}                         |
+        xargs samtools faidx {input.filtered_assembly}  \
+        >  {output.monotig_assembly}                    \
+        2> {log}
+        """
 
 
 #############
@@ -377,7 +418,7 @@ rule get_expressed_and_coding_fasta:
 
 rule make_bowtie2_index:
     input:
-        assembly=   config["assembly"]
+        monotig_assembly= filtering + "/assembly_exp_cod_mono.fasta"  
     output:
         name=       touch("data/index/assembly_bwt")
     log:
