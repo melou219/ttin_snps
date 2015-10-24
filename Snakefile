@@ -531,7 +531,7 @@ rule g2t_k2_index_bam:
         """
 
 rule g2t_k2_mpileup:
-    input:s
+    input:
         assembly= filtering + "/assembly_exp_cod_mono.fasta",
         bams= expand(
             g2t_k2 + "/{sample}.bam",
