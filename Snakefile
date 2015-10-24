@@ -34,8 +34,7 @@ rule all:
 rule clean:
     shell:
         """
-        rm -rf data/fastq_g_trimmed
-        rm -rf data/fastq_t_trimmed
+        rm -rf data/fastq_trimmed
         rm -rf data/indexes
         rm -rf data/kallisto_quant
         rm -rf data/sleuth
