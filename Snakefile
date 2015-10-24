@@ -168,7 +168,7 @@ rule build_kallisto_index:
     output:
         index    = indexes + "/assembly_kallisto.idx"
     benchmark:
-        "benchmark/kallisto/build_kallisto_index.json"
+        " benchmarks/kallisto/build_kallisto_index.json"
     log:
         "logs/kallisto/build_kallisto_index.json"
     threads:
@@ -271,7 +271,7 @@ rule get_normalized_tpm_table:
     log:
         "logs/sleuth/get_normalized_tpm_table.log"
     benchmark:
-        "benchmark/sleuth/get_normalized_tpm_table.json"
+        " benchmarks/sleuth/get_normalized_tpm_table.json"
     shell:
         """
         Rscript scripts/sleuth_get_normalized_tpm_table.R \
@@ -290,7 +290,7 @@ rule get_expressed_isoforms_ids:
     log:
         "logs/filtering/get_expressed_isoforms_ids.log"
     benchmark:
-        "benchmark/filtering/get_expressed_isoforms_ids.json"
+        " benchmarks/filtering/get_expressed_isoforms_ids.json"
     shell:
         """
         ( tail -n +2 {input.table}  |
@@ -313,7 +313,7 @@ rule get_coding_isoforms_ids:
     log:
         "logs/fitering/get_coding_isoforms_ids.log"
     benchmark:
-        "benchmark/filtering/get_coding_isoforms_ids.json"
+        " benchmarks/filtering/get_coding_isoforms_ids.json"
     shell:
         """
         python3 scripts/fasta_to_id.py < {input.pep}    |
@@ -333,7 +333,7 @@ rule get_expressed_and_coding_ids:
     log:
         "logs/filtering/get_expressed_and_coding_ids.log"
     benchmark:
-        "benchmark/filtering/get_expressed_and_coding_ids.json"
+        " benchmarks/filtering/get_expressed_and_coding_ids.json"
     threads:
         1
     shell:
@@ -358,7 +358,7 @@ rule get_expressed_and_coding_fasta:
     log:
         "logs/filtering/get_expressed_and_coding_fasta.log"
     benchmark:
-        "benchmark/filtering/get_expressed_and_coding_fasta.log"
+        " benchmarks/filtering/get_expressed_and_coding_fasta.log"
     shell:
         """
         cat {input.ids}                         |
@@ -379,7 +379,7 @@ rule get_monotigs_id:
     log:
         "logs/filtering/compute_monotigs_id.log"
     benchmark:
-        "benchmark/filtering/compute_monotigs_id.json"
+        " benchmarks/filtering/compute_monotigs_id.json"
     shell:
         """
         python3 scripts/filter_n_isogroups.py   \
@@ -402,7 +402,7 @@ rule get_monotigs_fasta:
     log:
         "logs/filtering/get_monotigs_fasta.log"
     benchmark:
-        "benchmark/filtering/get_monotigs_fasta.json"
+        " benchmarks/filtering/get_monotigs_fasta.json"
     shell:
         """
         samtools faidx {input.filtered_assembly}
@@ -424,7 +424,7 @@ rule create_monotigs_index:
     log:
         "logs/filtering/create_monotigs_index.log"
     benchmark:
-        "benchmark/filtering/create_monotigs_index.log"
+        " benchmarks/filtering/create_monotigs_index.log"
 
 
 
@@ -444,7 +444,7 @@ rule g2t_k2_make_bowtie2_index_assembly_exp_cod_mono:
     log:
         "logs/g2t_k2/g2t_k2_make_bowtie2_index_assembly_exp_cod_mono.log"
     benchmark:
-        "benchmark/g2t_k2/g2t_k2_make_bowtie2_index_assembly_exp_cod_mono"
+        " benchmarks/g2t_k2/g2t_k2_make_bowtie2_index_assembly_exp_cod_mono"
     shell:
         """
         {bowtie2build}                  \
@@ -471,7 +471,7 @@ rule g2t_k2_mapping:
     log:
         "logs/g2t_k2/g2t_k2_mapping_{sample}.log"
     benchmark:
-        "benchmark/g2t_k2/g2t_k2_mapping_{sample}.json"
+        " benchmarks/g2t_k2/g2t_k2_mapping_{sample}.json"
     params:
         id =      lambda wildcards: wildcards.sample,
         library = lambda wildcards: "LB:truseq_" + wildcards.sample,
@@ -525,7 +525,7 @@ rule g2t_k2_index_bam:
     log:
         "logs/g2t_k2/g2t_k2_index_bam_{sample}.log"
     benchmark:
-        "benchmark/g2t_k2/g2t_k2_index_bam_{sample}.json"
+        " benchmarks/g2t_k2/g2t_k2_index_bam_{sample}.json"
     shell:
         """
         {samtools} index {input.bam} 2> {log}
