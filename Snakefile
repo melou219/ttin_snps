@@ -1,4 +1,4 @@
-shell.prefix("set -euo pipefail;") 
+#shell.prefix("set -euo pipefail;") 
 
 configfile: "config.yaml"
 
@@ -11,6 +11,8 @@ quant        = "data/kallisto_quant"
 sleuth       = "data/sleuth"
 transdecoder = "data/transdecoder"
 filtering    = "data/filtering"
+g2t_k2       = "data/g2t_k2"
+
 
 # Path to programs
 kallisto    = config["software"]["kallisto"]
@@ -20,15 +22,14 @@ gzip        = config["software"]["gzip"]
 samtools    = config["software"]["samtools"]
 bcftools    = config["software"]["bcftools"]
 bowtie2build=   "bowtie2-build"
-
+bowtie2     = "bowtie2"
+samtools0   = "./bin/samtools0"
+bcftools0   = "./bin/bcftools0"
 
 rule all:
     input:
-        expand(trimmed + "/{sample}_u.fastq.gz",
-            sample= config["dna_pe"]), # Trimmed genmoe
-         filtering + "/assembly_exp_cod_mono.fasta"
-
-
+        g2t_k2 + "/all.vcf"
+        
 
 rule clean:
     shell:
@@ -39,6 +40,7 @@ rule clean:
         rm -rf data/kallisto_quant
         rm -rf data/sleuth
         rm -rf data/filtering
+        rm -rf data/g2t_k2
         rm -rf benchmarks
         rm -rf logs
         """
@@ -412,29 +414,43 @@ rule get_monotigs_fasta:
         """
 
 
+rule create_monotigs_index:
+    input:
+        fasta= filtering + "/id_expressed_and_coding.fasta"
+    output:
+        index= filtering + "/id_expressed_and_coding.fasta.fai"
+    threads:
+        1
+    log:
+        "logs/filtering/create_monotigs_index.log"
+    benchmark:
+        "benchmark/filtering/create_monotigs_index.log"
+
+
+
 #############
 ## G2T k=2 ##
 #############
 
-rule make_bowtie2_index:
+rule g2t_k2_make_bowtie2_index_assembly_exp_cod_mono:
     input:
         monotig_assembly= filtering + "/assembly_exp_cod_mono.fasta"  
     output:
-        name=       touch("data/index/assembly_bwt")
-    log:
-        "logs/bowtie2/make_bowtie2_index.log"
+        aux= expand(indexes + "/assembly_exp_cod_mono.{extension}",
+            extension= "1.bt2 2.bt2 3.bt2 4.bt2 rev.1.bt2 rev.2.bt2".split()),
+        name= touch(indexes + "/assembly_exp_cod_mono")
     threads:
         1
-    params:
-        dir=        "data/index"
+    log:
+        "logs/g2t_k2/g2t_k2_make_bowtie2_index_assembly_exp_cod_mono.log"
+    benchmark:
+        "benchmark/g2t_k2/g2t_k2_make_bowtie2_index_assembly_exp_cod_mono"
     shell:
         """
-        mkdir -p {params.dir}
-    
-        {bowtie2build}          \
-            {input.assembly}    \
-            {output}            \
-        >   {log}
+        {bowtie2build}                  \
+            {input.monotig_assembly}    \
+            {output.name}               \
+        >   {log} 2>&1
         """
     
 
@@ -446,50 +462,142 @@ rule g2t_k2_mapping:
     sam | bam | rmdup | sort conversions
     """
     input:
-        index=  "data/index/assembly",
-        f=      "data/fastq_g_trimmed/{sample}_1.fastq.gz",
-        r=      "data/fastq_g_trimmed/{sample}_2.fastq.gz",
-        u=      "data/fastq_g_trimmed/{sample}_U.fastq.gz"
+        index=  indexes + "/assembly_exp_cod_mono",
+        f=      trimmed + "/{sample}_1.fastq.gz",
+        r=      trimmed + "/{sample}_2.fastq.gz",
+        u=      trimmed + "/{sample}_u.fastq.gz"
     output:
-        bam=    "data/g2t_k2/{sample}.bam"
+        bam=    g2t_k2 + "/{sample}.bam"
     log:
-        out=    "data/g2t_k2/{sample}.out",
-        err=    "data/g2t_k2/{sample}.err"
+        "logs/g2t_k2/g2t_k2_mapping_{sample}.log"
+    benchmark:
+        "benchmark/g2t_k2/g2t_k2_mapping_{sample}.json"
     params:
-        sample= "{sample}",
-        dir=    "data/g2t_k2"
+        id =      lambda wildcards: wildcards.sample,
+        library = lambda wildcards: "LB:truseq_" + wildcards.sample,
+        platform= "PL:Illumina",
+        sample=   lambda wildcards: "SM:" + wildcards.sample
     threads:
         24
     shell:
         """
-        mkdir -p {params.dir}
+        ( {bowtie2}                         \
+            --threads   {threads}           \
+            --phred33                       \
+            --quiet                         \
+            --sensitive-local               \
+            --no-unal                       \
+            --no-unal                       \
+            --rg-id     {params.id}         \
+            --rg        {params.library}    \
+            --rg        {params.platform}   \
+            --rg        {params.sample}     \
+            -k  2                           \
+            -x  {input.index}               \
+            -1  {input.f}                   \
+            -2  {input.r}                   \
+            -U  {input.u}                   |
+        {samtools} view                     \
+            -S  `# Input is SAM`            \
+            -h  `# Print SAM header`        \
+            -u  `# Uncompressed SAM`        \
+            -                               |
+        {samtools0} rmdup -s - -            |
+        {samtools} sort                     \
+            -@  {threads}                   \
+            -l  9                           \
+            -o  -                           \
+            -T  $(mktemp -d)                \
+            -O  bam                         \
+        > {output.bam} )                    \
+        2> {log}
+        """
         
-        {bowtie2}                   \
-            --threads   {threads}   \
-            --phred33               \
-            --quiet                 \
-            --sensitive-local       \
-            --no-unal               \
-            -k  2                   \
-            -x  {input.index}       \
-            -1  {input.f}           \
-            -2  {input.r}           \
-            -U  {input.u}           |
-        {samtools}  view            \
-            -S  `# Input is SAM`    \
-            -h  `# Print SAM header`\
-            -u  `# Uncompressed SAM`\
-            -                       |
-        {samtools}  sort            \
-            -@  {threads}           \
-            -l  0                   \
-            -o                      \
-            - $(mktemp)             |
-        {samtools}  rmdup           \
-            -                       \
-        {output.bam}                \
-        2>  {log.err}
 
-        touch {log.out}
+
+rule g2t_k2_index_bam:
+    input:
+        bam = g2t_k2 + "/{sample}.bam"
+    output:
+        bai = g2t_k2 + "/{sample}.bam.bai"
+    threads:
+        1
+    log:
+        "logs/g2t_k2/g2t_k2_index_bam_{sample}.log"
+    benchmark:
+        "benchmark/g2t_k2/g2t_k2_index_bam_{sample}.json"
+    shell:
+        """
+        {samtools} index {input.bam} 2> {log}
         """
 
+rule g2t_k2_mpileup:
+    input:
+        assembly= filtering + "/assembly_exp_cod_mono.fasta",
+        bams= expand(
+            g2t_k2 + "/{sample}.bam",
+            sample = config["dna_pe"]
+        ),
+        indexes= expand(
+            g2t_k2 + "/{sample}.bam.bai",
+            sample = config["dna_pe"]
+        )
+    output:
+        bcf= g2t_k2 + "/all.bcf"
+    threads:
+        1
+    log:
+        "logs/g2t_k2/g2t_k2_mpileup.log"
+    benchmark:
+        "benchmarks/g2t_k2/g2t_k2_mpileup.json"
+    shell:
+        """
+        {samtools0} mpileup     \
+        -ABDguI                 \
+        -f  {input.assembly}    \
+        -C  50                  \
+        {input.bams}            \
+        >   {output.bcf}        \
+        2>  {log}
+        """
+
+
+
+rule g2t_k2_make_samples_txt:
+    output:
+        tsv= g2t_k2 + "/samples.txt"
+    threads:
+        1
+    log:
+        "logs/g2t_k2/g2t_k2_make_samples_txt.log"
+    benchmark:
+        "benchmarks/g2t_k2/g2t_k2_make_samples_txt.json"
+    run:
+        SAMPLES = config["dna_pe"]
+        with open(output.tsv, "w") as f_out:
+            for sample in SAMPLES:
+                f_out.write(sample + "\t" + "2" + "\n")
+
+rule g2t_k2_bcf_to_vcf:
+    """
+    ####################DIRTY
+    """
+    input:
+        bcf=     g2t_k2 + "/all.bcf",
+        samples= g2t_k2 + "/samples.txt"
+    output:
+        vcf= g2t_k2 + "/all.vcf"
+    threads:
+        1
+    log:
+        "logs/g2t_k2/g2t_k2_bcf_to_vcf.log"
+    benchmark:
+        "benchmarks/g2t_k2/g2t_k2_bcf_to_vcf.json"
+    shell:
+        """
+        {bcftools0} view -LNcegIv   \
+            -s {input.samples}      \
+            {input.bcf}             \
+        >   {output.vcf}            \
+        2>  {log}
+        """
