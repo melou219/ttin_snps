@@ -4,7 +4,7 @@ from Bio import SeqIO
 import sys
 
 def pep_to_isogroup(id):
-    return "|".join(id.split("|")[0:2])
+    return id.split("|")[0]
 
 
 if __name__ == "__main__":
