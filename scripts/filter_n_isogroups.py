@@ -14,10 +14,12 @@ def read_headers(filename):
 
 def get_gene(header):
     """
-    From a header of the form TRNNNN|gX_cY_iZ, get the TRNNNN|gX_cY and count how many times
+    From a header of the form TRNNNN|gX_cY_iZ, get the TRNNNN|gX_cY and count how many times.
+    Works too on new Trinity headers with the form TRINITYNNNN_gX_cY_iZ
     """
     header_splitted = header.split("_")
-    return "_".join(header_splitted[0:2])
+    n = len(header_splitted)
+    return "_".join(header_splitted[0:n-1])
 
 
 
