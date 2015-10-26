@@ -345,6 +345,7 @@ rule get_expressed_and_coding_ids:
         """
 
 
+
 rule get_expressed_and_coding_fasta:
     input:
         assembly= config["assembly"],
