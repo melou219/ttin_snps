@@ -7,7 +7,7 @@ assembly     = "data/assembly"
 raw          = "data/fastq_raw"
 trimmed      = "data/fastq_trimmed"
 indexes      = "data/indexes" 
-quant        = "data/kallisto_quant"
+quant        = "data/quant"
 sleuth       = "data/sleuth"
 transdecoder = "data/transdecoder"
 filtering    = "data/filtering"
@@ -28,7 +28,11 @@ bcftools0   = "./bin/bcftools0"
 
 rule all:
     input:
-        g2t_k2 + "/all.vcf"
+        g2t_k2 + "/all.vcf",
+        expand(
+            quant + "/{sample}/{sample}.bam",
+            sample = config["rna_pe"]
+        )
         
 
 rule clean:
@@ -36,7 +40,7 @@ rule clean:
         """
         rm -rf data/fastq_trimmed
         rm -rf data/indexes
-        rm -rf data/kallisto_quant
+        rm -rf data/quant
         rm -rf data/sleuth
         rm -rf data/filtering
         rm -rf data/g2t_k2
@@ -190,7 +194,7 @@ rule kallisto_quant_pe:
     output:
         abundance_tsv = quant + "/{sample}/abundance.tsv",
         abundance_h5  = quant + "/{sample}/abundance.h5",
-        pseudobam     = quant + "/{sample}/{sample}.bam"
+        pseudobam     = temp(quant + "/{sample}/{sample}_unsorted.bam")
     params:
         outdir  = quant + "/{sample}",
         params  = config["kallisto_params"]
@@ -216,15 +220,34 @@ rule kallisto_quant_pe:
             -u  `# Uncompressed SAM`    \
             -                           |
         {samtools} rmdup                \
-            -s - -                      |
-        {samtools} sort                 \
-            -@  {threads}               \
-            -l  9                       \
-            -o  -                       \
-            -T  $(mktemp)               \
-            -O  bam                     \
+            -s - -                      \
         > {output.pseudobam} )          \
         2> {log}
+        """
+
+
+
+rule kallisto_sort_pseudobam:
+    input:
+        pseudobam = quant + "/{sample}/{sample}_unsorted.bam"
+    output:
+        pseudobam = quant + "/{sample}/{sample}.bam"
+    threads:
+        24
+    log:
+        "logs/quant/sort_pseudobam_{sample}.log"
+    benchmark:
+        "benchmarks/quant/sort_pseudobam_{sample}.json"
+    shell:
+        """
+        {samtools} sort             \
+            -@  {threads}           \
+            -l  9                   \
+            -o  {output.pseudobam}  \
+            -T  $(mktemp -d)        \
+            -O  bam                 \
+            {input.pseudobam}       \
+        2>  {log}
         """
 
 
@@ -515,6 +538,8 @@ rule g2t_k2_mapping:
         
 
 
+
+
 rule g2t_k2_index_bam:
     input:
         bam = g2t_k2 + "/{sample}.bam"
@@ -530,6 +555,8 @@ rule g2t_k2_index_bam:
         """
         {samtools} index {input.bam} 2> {log}
         """
+
+
 
 rule g2t_k2_mpileup:
     input:
@@ -578,6 +605,8 @@ rule g2t_k2_make_samples_txt:
             for sample in SAMPLES:
                 f_out.write(sample + "\t" + "2" + "\n")
 
+
+
 rule g2t_k2_bcf_to_vcf:
     """
     ####################DIRTY
@@ -586,7 +615,7 @@ rule g2t_k2_bcf_to_vcf:
         bcf=     g2t_k2 + "/all.bcf",
         samples= g2t_k2 + "/samples.txt"
     output:
-        vcf= g2t_k2 + "/all.vcf"
+        vcf=     g2t_k2 + "/all.vcf"
     threads:
         1
     log:
