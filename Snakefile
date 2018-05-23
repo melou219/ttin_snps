@@ -12,7 +12,8 @@ sleuth       = "data/sleuth"
 transdecoder = "data/transdecoder"
 filtering    = "data/filtering"
 g2t_k2       = "data/g2t_k2"
-
+t2t_k1       = "data/t2t_k1"
+g2t_k1       = "data/g2t_k1"
 
 # Path to programs
 kallisto    = config["software"]["kallisto"]
@@ -28,11 +29,19 @@ bcftools0   = "./bin/bcftools0"
 
 rule all:
     input:
-        g2t_k2 + "/all.vcf",
+        "data/g2t_k2/all.vcf",
+        "data/g2t_k2.bam",
+        "data/g2t_k2.bam.bai",
+        "data/g2t_k1/g2t.vcf",
+        "data/g2t_k1.bam",
+        "data/g2t_k1.bam.bai",
+        "data/t2t_k1/t2t.vcf",
+        "data/t2t_k1.bam",
+        "data/t2t_k1.bam.bai",
         expand(
             quant + "/{sample}/{sample}.bam",
             sample = config["rna_pe"]
-        )
+        ),
         
 
 rule clean:
@@ -439,9 +448,9 @@ rule get_monotigs_fasta:
 
 rule create_monotigs_index:
     input:
-        fasta= filtering + "/id_expressed_and_coding.fasta"
+        fasta= filtering + "/assembly_exp_cod_mono.fasta"
     output:
-        index= filtering + "/id_expressed_and_coding.fasta.fai"
+        index= filtering + "/assembly_exp_cod_mono.fasta.fai"
     threads:
         1
     log:
@@ -607,6 +616,8 @@ rule g2t_k2_make_samples_txt:
 
 
 
+
+
 rule g2t_k2_bcf_to_vcf:
     """
     ####################DIRTY
@@ -629,4 +640,395 @@ rule g2t_k2_bcf_to_vcf:
             {input.bcf}             \
         >   {output.vcf}            \
         2>  {log}
+        """
+
+
+
+rule g2t_k2_merge_bam:
+    input:
+        bams = expand(
+            g2t_k2 + "/{sample}.bam",
+            sample = config["dna_pe"]
+        ),
+        indexes = expand(
+            g2t_k2 + "/{sample}.bam.bai",
+            sample= config["dna_pe"]
+        ) 
+    output:
+        bam = "data/g2t_k2.bam",
+        bai = "data/g2t_k2.bam.bai"
+    log:
+        "logs/g2t_k2/merge_bam.log"
+    benchmark:
+        "benchmarks/g2t_k2/merge_bam.json"
+    shell:
+        """
+        {samtools0} merge \
+            -l 9 \
+            -@ 24 \
+            {output.bam} \
+            {input.bams} \
+        2> {log} && \
+        {samtools0} index \
+            {output.bam} \
+        2> {log}
+        """
+
+
+### T2T
+rule t2t_k1_mapping:
+    """
+    Perform the t2t mapping with bowtie2 and the 
+    sam | bam | rmdup | sort conversions
+    """
+    input:
+        index=  indexes + "/assembly_exp_cod_mono",
+        f=      trimmed + "/{sample}_1.fastq.gz",
+        r=      trimmed + "/{sample}_2.fastq.gz",
+        u=      trimmed + "/{sample}_u.fastq.gz"
+    output:
+        bam=    t2t_k1 + "/{sample}.bam"
+    log:
+        "logs/t2t_k1/mapping_{sample}.log"
+    benchmark:
+        "benchmarks/t2t_k1/mapping_{sample}.json"
+    params:
+        id =      "{sample}",
+        library = "LB:truseq_{sample}",
+        platform= "PL:Illumina",
+        sample=   "SM:{sample}"
+    threads:
+        24
+    shell:
+        """
+        ( {bowtie2} \
+            --threads {threads} \
+            --phred33 \
+            --quiet \
+            --sensitive-local \
+            --no-unal \
+            --rg-id {params.id} \
+            --rg {params.library} \
+            --rg {params.platform} \
+            --rg {params.sample} \
+            -x  {input.index} \
+            -U  {input.f},{input.r},{input.u} |
+        {samtools} view \
+            -S  `# Input is SAM` \
+            -h  `# Print SAM header` \
+            -u  `# Uncompressed SAM` \
+            - |
+        {samtools0} rmdup -s - - |
+        {samtools} sort \
+            -@ {threads} \
+            -l 9 \
+            -o - \
+            -T $(mktemp -d) \
+            -O bam \
+        > {output.bam} ) \
+        2> {log}
+        """
+
+
+
+rule t2t_k1_index_bam_sample:
+    input:
+        bam = t2t_k1 + "/{sample}.bam"
+    output:
+        bai = t2t_k1 + "/{sample}.bam.bai"
+    threads:
+        1
+    log:
+        "logs/t2t_k1/index_bam_{sample}.log"
+    benchmark:
+        "benchmarks/t2t_k1/index_bam_{sample}.json"
+    shell:
+        """
+        {samtools} index {input.bam} 2> {log}
+        """
+
+
+
+rule t2t_k1_mpileup:
+    input:
+        assembly= filtering + "/assembly_exp_cod_mono.fasta",
+        bams= expand(
+            t2t_k1 + "/{sample}.bam",
+            sample = config["rna_pe"]
+        ),
+        indexes= expand(
+            t2t_k1 + "/{sample}.bam.bai",
+            sample = config["rna_pe"]
+        )
+    output:
+        bcf= t2t_k1 + "/t2t.bcf"
+    threads:
+        1
+    log:
+        "logs/t2t_k1/mpileup.log"
+    benchmark:
+        "benchmarks/t2t_k1/mpileup.json"
+    shell:
+        """
+        {samtools0} mpileup \
+            -DguI \
+            -f {input.assembly} \
+            -C 50 \
+            {input.bams} \
+        > {output.bcf} \
+        2> {log}
+        """
+
+
+
+rule t2t_k1_make_samples_txt:
+    output:
+        tsv= t2t_k1 + "/samples.txt"
+    threads:
+        1
+    log:
+        "logs/t2t_k1/make_samples_txt.log"
+    benchmark:
+        "benchmarks/t2t_k1/make_samples_txt.json"
+    run:
+        SAMPLES = config["rna_pe"]
+        with open(output.tsv, "w") as f_out:
+            for sample in SAMPLES:
+                f_out.write(sample + "\t" + "2" + "\n")
+
+
+
+rule t2t_k1_bcf_to_vcf:
+    """
+    """
+    input:
+        bcf=     t2t_k1 + "/t2t.bcf",
+        samples= t2t_k1 + "/samples.txt"
+    output:
+        vcf=     t2t_k1 + "/t2t.vcf"
+    threads:
+        1
+    log:
+        "logs/t2t_k1/bcf_to_vcf.log"
+    benchmark:
+        "benchmarks/t2t_k1/bcf_to_vcf.json"
+    shell:
+        """
+        {bcftools0} view -LNcegIv   \
+            -s {input.samples}      \
+            {input.bcf}             \
+        >   {output.vcf}            \
+        2>  {log}
+        """
+
+
+
+rule t2t_k1_merge_bam:
+    input:
+        bams = expand(
+            t2t_k1 + "/{sample}.bam",
+            sample = config["rna_pe"]
+        ),
+        indexes = expand(
+            t2t_k1 + "/{sample}.bam.bai",
+            sample= config["rna_pe"]
+        ) 
+    output:
+        bam = "data/t2t_k1.bam",
+        bai = "data/t2t_k1.bam.bai"
+    log:
+        "logs/t2t_k1/merge_bam.log"
+    benchmark:
+        "benchmarks/t2t_k1/merge_bam.json"
+    shell:
+        """
+        {samtools0} merge \
+            -l 9 \
+            -@ 24 \
+            {output.bam} \
+            {input.bams} \
+        2> {log} && \
+        {samtools0} index \
+            {output.bam} \
+        2> {log}
+        """
+
+
+
+# G2T k=1
+rule g2t_k1_mapping:
+    """
+    Perform the t2t mapping with bowtie2 and the 
+    sam | bam | rmdup | sort conversions
+    """
+    input:
+        index=  indexes + "/assembly_exp_cod_mono",
+        f=      trimmed + "/{sample}_1.fastq.gz",
+        r=      trimmed + "/{sample}_2.fastq.gz",
+        u=      trimmed + "/{sample}_u.fastq.gz"
+    output:
+        bam=    g2t_k1 + "/{sample}.bam"
+    log:
+        "logs/g2t_k1/mapping_{sample}.log"
+    benchmark:
+        "benchmarks/g2t_k1/mapping_{sample}.json"
+    params:
+        id =      "{sample}",
+        library = "LB:truseq_{sample}",
+        platform= "PL:Illumina",
+        sample=   "SM:{sample}"
+    threads:
+        24
+    shell:
+        """
+        ( {bowtie2} \
+            --threads {threads} \
+            --phred33 \
+            --quiet \
+            --sensitive-local \
+            --no-unal \
+            --rg-id {params.id} \
+            --rg {params.library} \
+            --rg {params.platform} \
+            --rg {params.sample} \
+            -x  {input.index} \
+            -U  {input.f},{input.r},{input.u} |
+        {samtools} view \
+            -S  `# Input is SAM` \
+            -h  `# Print SAM header` \
+            -u  `# Uncompressed SAM` \
+            - |
+        {samtools0} rmdup -s - - |
+        {samtools} sort \
+            -@ {threads} \
+            -l 9 \
+            -o - \
+            -T $(mktemp -d) \
+            -O bam \
+        > {output.bam} ) \
+        2> {log}
+        """
+
+
+
+rule g2t_k1_index_bam_sample:
+    input:
+        bam = g2t_k1 + "/{sample}.bam"
+    output:
+        bai = g2t_k1 + "/{sample}.bam.bai"
+    threads:
+        1
+    log:
+        "logs/g2t_k1/index_bam_{sample}.log"
+    benchmark:
+        "benchmarks/g2t_k1/index_bam_{sample}.json"
+    shell:
+        """
+        {samtools} index {input.bam} 2> {log}
+        """
+
+
+
+rule g2t_k1_mpileup:
+    input:
+        assembly= filtering + "/assembly_exp_cod_mono.fasta",
+        bams= expand(
+            g2t_k1 + "/{sample}.bam",
+            sample = config["dna_pe"]
+        ),
+        indexes= expand(
+            g2t_k1 + "/{sample}.bam.bai",
+            sample = config["dna_pe"]
+        )
+    output:
+        bcf= g2t_k1 + "/g2t.bcf"
+    threads:
+        1
+    log:
+        "logs/g2t_k1/mpileup.log"
+    benchmark:
+        "benchmarks/g2t_k1/mpileup.json"
+    shell:
+        """
+        {samtools0} mpileup \
+            -DguI \
+            -f {input.assembly} \
+            -C 50 \
+            {input.bams} \
+        > {output.bcf} \
+        2> {log}
+        """
+
+
+
+rule g2t_k1_make_samples_txt:
+    output:
+        tsv= g2t_k1 + "/samples.txt"
+    threads:
+        1
+    log:
+        "logs/g2t_k1/make_samples_txt.log"
+    benchmark:
+        "benchmarks/g2t_k1/make_samples_txt.json"
+    run:
+        SAMPLES = config["dna_pe"]
+        with open(output.tsv, "w") as f_out:
+            for sample in SAMPLES:
+                f_out.write(sample + "\t" + "2" + "\n")
+
+
+
+rule g2t_k1_bcf_to_vcf:
+    """
+    """
+    input:
+        bcf=     g2t_k1 + "/g2t.bcf",
+        samples= g2t_k1 + "/samples.txt"
+    output:
+        vcf=     g2t_k1 + "/g2t.vcf"
+    threads:
+        1
+    log:
+        "logs/g2t_k1/bcf_to_vcf.log"
+    benchmark:
+        "benchmarks/g2t_k1/bcf_to_vcf.json"
+    shell:
+        """
+        {bcftools0} view -LNcegIv   \
+            -s {input.samples}      \
+            {input.bcf}             \
+        >   {output.vcf}            \
+        2>  {log}
+        """
+
+
+
+rule g2t_k1_merge_bam:
+    input:
+        bams = expand(
+            g2t_k1 + "/{sample}.bam",
+            sample = config["rna_pe"]
+        ),
+        indexes = expand(
+            g2t_k1 + "/{sample}.bam.bai",
+            sample= config["rna_pe"]
+        ) 
+    output:
+        bam = "data/g2t_k1.bam",
+        bai = "data/g2t_k1.bam.bai"
+    log:
+        "logs/g2t_k1/merge_bam.log"
+    benchmark:
+        "benchmarks/g2t_k1/merge_bam.json"
+    shell:
+        """
+        {samtools0} merge \
+            -l 9 \
+            -@ 24 \
+            {output.bam} \
+            {input.bams} \
+        2> {log} && \
+        {samtools0} index \
+            {output.bam} \
+        2> {log}
         """

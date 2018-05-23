@@ -2,11 +2,11 @@ library(sleuth)
 
 base_dir <- "."
 
-sample_id <- dir(file.path(base_dir,"data/kallisto_quant"))
+sample_id <- dir(file.path(base_dir,"data/quant"))
 
 kal_dirs <- sapply(
     sample_id, 
-    function(id) file.path(base_dir, "data/kallisto_quant", id)
+    function(id) file.path(base_dir, "data/quant", id)
 )
 
 

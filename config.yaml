@@ -1,1 +1,73 @@
-config.yaml.example
+rna_pe:
+    BW-330:
+        forward:   data/fastq_raw/BW-330_1.fastq.gz
+        reverse:   data/fastq_raw/BW-330_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: brain_female
+    BW-389:
+        forward:   data/fastq_raw/BW-389_1.fastq.gz
+        reverse:   data/fastq_raw/BW-389_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: brain_male
+    MW-330:
+        forward:   data/fastq_raw/MW-330_1.fastq.gz
+        reverse:   data/fastq_raw/MW-330_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: muscle_female
+    MW-389:
+        forward:   data/fastq_raw/MW-389_1.fastq.gz
+        reverse:   data/fastq_raw/MW-389_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: muscle_male
+    MWH-377:
+        forward:   data/fastq_raw/MWH-377_1.fastq.gz
+        reverse:   data/fastq_raw/MWH-377_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: muscle_female
+    MWT-240:
+        forward:   data/fastq_raw/MWT-240_1.fastq.gz
+        reverse:   data/fastq_raw/MWT-240_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+        condition: muscle_male
+
+dna_pe:
+    western:
+        forward:   data/fastq_raw/C6KB3ANXX_3_10nf_1.fastq.gz
+        reverse:   data/fastq_raw/C6KB3ANXX_3_10nf_2.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+    eastern: 
+        forward:   data/fastq_raw/C6KB3ANXX_8_14nf_1.fastq.gz
+        reverse:   data/fastq_raw/C6KB3ANXX_8_14nf_1.fastq.gz
+        adaptor:   ./src/Trimmomatic-0.33/adapters/TruSeq3-PE-2.fa
+        phred:     phred33
+
+
+assembly:
+    data/assembly/all_normalized.fasta
+
+
+
+pep:
+    data/transdecoder/ttin.pep
+
+
+software:
+    kallisto:    ./bin/kallisto
+    trimmomatic: java -jar ./src/Trimmomatic-0.33/trimmomatic-0.33.jar
+    gzip:        pigz
+    samtools:    ./bin/samtools
+    bcftools:    ./bin/bcftools
+
+trimmomatic_params:
+    SLIDINGWINDOW:4:5 LEADING:5 TRAILING:5 MINLEN:25 TOPHRED33
+
+kallisto_params:
+    --bootstrap-samples=100
+
